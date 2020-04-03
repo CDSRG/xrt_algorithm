@@ -24,6 +24,9 @@ con <- odbcDriverConnect(connection="driver={SQL Server};
 ### retrieve prepared data from database
 
 cohort <- sqlQuery(con, "SELECT * FROM ORD_Thompson_201805044D.Dflt.CJM_20200323_radiation_TX", as.is = TRUE)
+
+### coerce date columns to POSIXct
+
 cohort$DOB <- as.POSIXct(cohort$DOB)
 cohort$DOD <- as.POSIXct(cohort$DOD)
 cohort$LastFollowUp <- as.POSIXct(cohort$LastFollowUp)
