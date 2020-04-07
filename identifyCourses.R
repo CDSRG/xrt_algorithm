@@ -1,6 +1,5 @@
 ### CDSRG
-### IDENTIFY RADIATION COURSES ALGORITHM 1
-### 1 April 2020
+### IDENTIFY RADIATION COURSES ALGORITHM 
 
 # retrieve data
 
@@ -24,9 +23,6 @@ con <- odbcDriverConnect(connection="driver={SQL Server};
 ### retrieve prepared data from database
 
 cohort <- sqlQuery(con, "SELECT * FROM ORD_Thompson_201805044D.Dflt.CJM_20200323_radiation_TX", as.is = TRUE)
-
-### coerce date columns to POSIXct
-
 cohort$DOB <- as.POSIXct(cohort$DOB)
 cohort$DOD <- as.POSIXct(cohort$DOD)
 cohort$LastFollowUp <- as.POSIXct(cohort$LastFollowUp)
@@ -172,7 +168,43 @@ for (c in 1:length(courses)) {
 }
 
 
+### write courses to file for posterity
+
+rownames(patCourses) <- NULL
+
+write.table(patCourses, file = "P:/ORD_Thompson_201805044D/Celia/ALGORITHM/20200406_courses_1.csv", sep = ",", row.names = FALSE)
 
 
 
+### check gold standard
+
+goldstandard <- sqlQuery(con, "SELECT
+PatientICN,
+JLV_TotalNumCourses,
+JLV_OrdinalThisCourse,
+JLV_FirstEventThisCourse,
+JLV_LastEventThisCourse
+FROM ORD_Thompson_201805044D.Dflt.GOLD_STANDARD", as.is = TRUE)
+
+
+
+goldICNs <- unique(goldstandard$PatientICN)
+
+
+checkpats <- patCourses[which(patCourses$PatientICN %in% goldICNs),]
+
+### don't know why, but 28 unique patients in gold standard table, and only 12 had data in patCourses
+
+verifycourses <- merge(goldstandard, checkpats, by = "PatientICN")
+
+verifycourses$FirstTxEvent <- as.Date(verifycourses$FirstTxEvent, format = "%Y-%m-%d")
+verifycourses$LastTxEvent <- as.Date(verifycourses$LastTxEvent, format = "%Y-%m-%d")
+
+verifycourses$multiples <- (verifycourses$JLV_TotalNumCourses > 1 && verifycourses$MultipleCourses != "no") || (verifycourses$JLV_TotalNumCourses == 1 && verifycourses$MultipleCourses != "yes")
+
+verifycourses$StartDate <- (verifycourses$JLV_FirstEventThisCourse == verifycourses$FirstTxEvent)
+
+verifycourses$EndDate <- (verifycourses$JLV_LastEventThisCourse == verifycourses$LastTxEvent)
+
+write.table(verifycourses, file = "P:/ORD_Thompson_201805044D/Celia/ALGORITHM/20200406_verified_courses_1.csv", sep = ",", row.names = FALSE)
 
