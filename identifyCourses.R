@@ -1,17 +1,208 @@
 ### CDSRG
 ### IDENTIFY RADIATION COURSES ALGORITHM 
 
-# retrieve data
+################################################################################
+### prepQuery()
+
+prepQuery <- function(con, query=NULL, rows_at_time=attr(con, "rows_at_time")) {
+  # test database connection and clear error log
+  if (!RODBC:::odbcValidChannel(con)) {
+    log_error("Invalid DB connection")
+    return(FALSE)
+  }
+  tryCatch(
+    odbcClearError(con),
+    error=function(e) {
+      log_error(e$message)
+      return(FALSE)
+    }
+  )
+  if (is.null(query)) {
+    log_error("Missing value for 'query'")
+    return(FALSE)
+  }
+  if (!is.character(query)) {
+    log_warn("Converting from non-character value provided for 'query'")
+    query <- as.character(query)
+  }
+  if (length(query) != 1) {
+    log_error("Single value required for 'query'")
+    return(FALSE)
+  }
+  if (nchar(query) < 1) {
+    log_error("Empty 'query' provided")
+    return(FALSE)
+  }
+  log_info("Prepping query: ", query)	
+  if (.Call(RODBC:::C_RODBCQuery, attr(con, "handle_ptr"), query, as.integer(rows_at_time)) < 0) {
+    log_error("Error evaluating query using provided DB connection")
+    log_error(odbcGetErrMsg(con))
+    return(FALSE)
+  }
+  return(TRUE)
+}
+
+################################################################################
+### fetchQuery()
+
+fetchQuery <- function(con, n=NULL, buffsize=1000, FUN=NULL, as.is=FALSE, ...) {
+  # test database connection
+  if (!RODBC:::odbcValidChannel(con)) {
+    log_error("Invalid DB connection")
+    return(FALSE)
+  }
+  cols <- .Call(RODBC:::C_RODBCNumCols, attr(con, "handle_ptr"))
+  if (cols < 0L) {
+    log_error("No data")
+    return(FALSE)
+  }
+  cData <- .Call(RODBC:::C_RODBCColData, attr(con, "handle_ptr"))
+  if (!is.numeric(n) | (length(n) != 1)) { 
+    n <- 0
+  }
+  n <- max(0, floor(n), na.rm=TRUE)
+  if (is.logical(as.is) & length(as.is) == 1) {
+    as.is <- rep(as.is, length=cols)
+  }
+  else if (is.numeric(as.is)) {
+    if (any(as.is < 1 | as.is > cols)) 
+      log_warn("invalid numeric 'as.is' values: ", as.is[which(as.is < 1 | as.is > cols)])
+    as.is <- as.is[which(as.is >= 1 & as.is <= cols)]
+    i <- rep(FALSE, cols)
+    i[as.is] <- TRUE
+    as.is <- i
+  }
+  else if (is.character(as.is)) {
+    as.is <- cData$names %in% as.is
+  }
+  if (length(as.is) != cols) {
+    log_error("'as.is' has the wrong length ", length(as.is), " != cols = ", cols)
+    return(FALSE)
+  }
+  as.is <- which(as.is)
+  if (is.null(FUN)) {
+    FUN <- return
+    use.dots <- FALSE
+  }
+  else {
+    tryCatch(
+      FUN <- match.fun(FUN),
+      error=function(e) {
+        log_error(e$message)
+        return(FALSE)				
+      }
+    )
+    use.dots <- (...length() > 0L) & (length(formals(FUN)) > 1L)
+  }
+  counter <- 0
+  nresults <- 0
+  repeat {
+    data <- .Call(RODBC:::C_RODBCFetchRows, attr(con, "handle_ptr"), n, buffsize, NA_character_, TRUE)
+    if ((data$stat) < 0L) {
+      if (counter > 0L) {
+        log_info("Completed fetch (", nresults, " results)")
+      }
+      else if (data$stat == -1) {
+        log_error(odbcGetErrMsg(con))
+      }
+      break
+    }
+    log_info("Fetching query results", 
+             if (n > 0) { 
+               paste(" (", floor(counter*n), "-", (counter+1)*n-1, ")", sep="") 
+             }
+             else {
+               " (all)"
+             }
+    )
+    counter <- counter + 1
+    names(data$data) <- cData$names
+    for (i in as.is) {
+      tryCatch(
+        switch(cData$type[i],
+               int = data$data[[i]] <- as.integer(data$data[[i]]),
+               smallint = data$data[[i]] <- as.integer(data$data[[i]]),
+               decimal = data$data[[i]] <- as.numeric(data$data[[i]]),
+               date = data$data[[i]] <- as.Date(data$data[[i]]),
+               timestamp = data$data[[i]] <- as.POSIXct(data$data[[i]]),
+               unknown = data$data[[i]] <- type.convert(data$data[[i]])
+        ),
+        error=function(e) {
+          log_warn("Error converting ", cData$names[i], ": ", e$message)
+        }
+      )
+    }
+    tryCatch(
+      if (use.dots) {
+        forceAndCall(1, FUN, data$data, ...)
+      }
+      else {
+        forceAndCall(1, FUN, data$data)
+      },
+      error=function(e) {
+        log_error(e$message)
+        log_error(odbcGetErrMsg(con))
+        return(FALSE)
+      }
+    )
+    nresults <- nresults + length(data$data[[1]])
+  }
+  return(TRUE)
+}
+
+################################################################################
+### function for populating R hash environment with patient stay data
+
+storeInHash <- function(x) {
+  
+  ### coerce datatypes; ICN must be char to use as hash key, and dates kept as char now and coerced to POSIX later
+  x$PatientICN <- as.character(x$PatientICN)
+  x$EventDateTime <- as.character(x$EventDateTime)
+  x$FirstTxEvent  <- as.character(x$FirstTxEvent)
+  x$LastTxEvent <- as.character(x$LastTxEvent)
+
+  temp <- function(ICN, code, cate, EDT, ord, tot, DSPE, DUNE, first, last, dur, HSPE, HUNE) {
+    
+    patdata <- patenv[[ICN]]
+    
+    if (is.null(patdata)) {
+      
+      patdata <- data.frame("PatientICN" = numeric(), "EventCode" = numeric(), "EventCategory" = character(), "EventDateTime" = character(), 
+                           "OrdinalThisEvent" = numeric(), "TotalNumTx" = numeric(), "DaysSincePrevEvent" = numeric(), "DaysUntilNextEvent" = numeric(), 
+                           "FirstTxEvent" = character(), "LastTxEvent" = character(), "DurationTx"  = numeric(),
+                           "HoursSincePrevEvent" = numeric(), "HoursUntilNextEvent" = numeric())
+      
+    }
+    
+    newRow <- data.frame(as.numeric(ICN), code, cate, EDT, ord, tot, DSPE, DUNE, first, last, dur, HSPE, HUNE, stringsAsFactors = FALSE)
+    colnames(newRow) <- c("PatientICN", "EventCode", "EventCategory", "EventDateTime", "OrdinalThisEvent", "TotalNumTx", "DaysSincePrevEvent",
+                          "DaysUntilNextEvent", "FirstTxEvent", "LastTxEvent", "DurationTx", "HoursSincePrevEvent", "HoursUntilNextEvent")
+    
+    patdata <- rbind(patdata, newRow, stringsAsFactors = FALSE, make.row.names = FALSE)
+    
+    patenv[[ICN]] <- patdata
+    
+  }
+  
+  mapply(temp, x$PatientICN, x$EventCode, x$EventCategory, x$EventDateTime, x$OrdinalThisEvent, x$TotalNumTx, x$DaysSincePrevEvent,
+         x$DaysUntilNextEvent, x$FirstTxEvent, x$LastTxEvent, x$DurationTx, x$HoursSincePrevEvent, x$HoursUntilNextEvent)
+  
+  return()
+  
+}
+
+################################################################################
 
 ### prepare package dependencies
 
-if (!requireNamespace("RODBC", partial = TRUE, quietly = TRUE)) {
-  warning("installing missing package 'RODBC'")
-  install.packages("RODBC", quiet = TRUE)
-}
-if (!isNamespaceLoaded("RODBC")) {
-  suppressPackageStartupMessages(require("RODBC"))
-}
+require("RODBC")
+require("logger")
+
+################################################################################
+### establish logging and output log file
+
+logfile <- "P:/ORD_Thompson_201805044D/Celia/ALGORITHM/20200409_identifyCourses.log"
+log_appender(appender_file(logfile), index=2)
 
 ### prepare database connection
 
@@ -20,15 +211,142 @@ con <- odbcDriverConnect(connection="driver={SQL Server};
 	                                  database=ORD_Thompson_201805044D;
 	                                  trusted_connection=TRUE")
 
-### retrieve prepared data from database
+### query to retrieve prepared data from database
 
-cohort <- sqlQuery(con, "SELECT * FROM ORD_Thompson_201805044D.Dflt.CJM_20200323_radiation_TX", as.is = TRUE)
-cohort$DOB <- as.POSIXct(cohort$DOB)
-cohort$DOD <- as.POSIXct(cohort$DOD)
-cohort$LastFollowUp <- as.POSIXct(cohort$LastFollowUp)
-cohort$EventDateTime <- as.POSIXct(cohort$EventDateTime)
-cohort$FirstTxEvent <- as.POSIXct(cohort$FirstTxEvent)
-cohort$LastTxEvent <- as.POSIXct(cohort$LastTxEvent)
+query <- "SELECT 
+PatientICN,
+EventCode,
+EventCategory,
+EventDateTime,
+EventWeekOfYear,
+EventWeekday,
+OrdinalThisEvent,
+TotalNumTx,
+DaysSincePrevEvent,
+DaysUntilNextEvent,
+FirstTxEvent,
+FirstWeekday,
+LastTxEvent,
+LastWeekday,
+DurationTx,
+HoursSincePrevEvent,
+HoursUntilNextEvent
+FROM ORD_Thompson_201805044D.Dflt.CJM_20200323_radiation_TX"
+
+### create environment
+
+patenv <- new.env(hash = TRUE)
+
+### retrieve data and populate environment
+
+prepQuery(con, query)
+fetchQuery(con, n = 100000, FUN = storeInHash)
+
+### create list of individual patients
+
+pats <- ls(envir = patenv)
+
+### process data for each patient
+########################## NEED TO AGGREGATE EVENTS WITHIN A FEW HOURS #######################################################################################################
+
+for (pat in pats) {
+  
+  ### retrieve this patient's data
+  
+  patdata <- patenv[[pat]]
+  
+  patdata$EventDateTime <- as.POSIXct(patdata$EventDateTime)
+  patdata$FirstTxEvent <- as.POSIXct(patdata$FirstTxEvent)
+  patdata$LastTxEvent <- as.POSIXct(patdata$LastTxEvent)
+  
+  ### add columns for total number of courses (for this patient) and ordinal discriminating them; assuming everything == 1 for now
+  
+  patdata$TotalNumCourses <- 1
+  patdata$OrdinalThisCourse <- 1
+  
+  ### check duration of treatment
+  ### length of treatment could be the first indication of number of courses
+  
+  ### if total duration is more than six months, split into two courses at point of biggest gap; then start over with each
+  
+  if (patdata[1,"DurationTx"] > 183) {
+    
+    ### instantiate flag variable
+    
+    morePossible <- "yes"
+    
+    while (morePossible == "yes") {
+      
+      ### identify biggest gap between treatment events
+      
+      maxgap <- max(thisPat$DaysUntilNextEvent, na.rm = TRUE)
+      if (maxgap == -Inf) { maxgap <- 0 }
+      
+      ### split course at point of biggest gap
+      
+      divideCourses <- patdata[which(patdata$DaysUntilNextEvent == maxgap), "EventDateTime"]
+      patdata1 <- patdata[which(patdata$EventDateTime <= divideCourses),]
+      patdata2 <- patdata[which(patdata$EventDateTime > divideCourses),]
+      
+      rm(patdata)
+      
+      ### fix course count columns
+      
+      patdata1$TotalNumCourses <- 2
+      patdata2$TotalNumCourses <- 2
+      patdata2$OrdinalThisCourse <- 2
+      
+      ### fix other columns
+      
+      patdata1$TotalNumTx <- nrow(patdata1)
+      patdata2$TotalNumTx <- nrow(patdata2)
+      
+      patdata1$LastTxEvent <- divideCourses
+      patdata2$FirstTxEvent <- divideCourses
+      
+      
+      
+    }
+    
+    
+    
+  }
+  
+  ### check pattern of treatment/non-treatment days
+  
+  ### build patient treatment calendar
+  
+#  patCalendar <- data.frame(matrix(nrow = 0, ncol = 8, dimnames = list(NULL, c("WeekOfYear", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))))
+  
+  
+  
+  
+  
+  
+  
+  
+  
+                            
+#  patenv[[pat]] <- list(patdata, patCalendar)
+  
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+######################################################################################## OLD STUFF THAT MAY YET BE USEFUL
+
+
 
 
 
