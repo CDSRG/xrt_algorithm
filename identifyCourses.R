@@ -156,27 +156,36 @@ fetchQuery <- function(con, n=NULL, buffsize=1000, FUN=NULL, as.is=FALSE, ...) {
 storeInHash <- function(x) {
   
   ### coerce datatypes; ICN must be char to use as hash key, and dates kept as char now and coerced to POSIX later
+  
   x$PatientICN <- as.character(x$PatientICN)
+  x$EventGeneralCategory  <- as.character(x$EventGeneralCategory)
   x$EventDateTime <- as.character(x$EventDateTime)
-  x$FirstTxEvent  <- as.character(x$FirstTxEvent)
-  x$LastTxEvent <- as.character(x$LastTxEvent)
-
-  temp <- function(ICN, code, cate, EDT, ord, tot, DSPE, DUNE, first, last, dur, HSPE, HUNE) {
+  x$NextEvent <- as.character(x$NextEvent)
+  x$PrevEvent <- as.character(x$PrevEvent)
+  
+  
+  temp <- function(ICN, EGC, EDT, EY, EM, ED, EW, EWd, tot, exp, hist, man, otv, phys, enc, hyp, ima, tx, plan, sim, se, nextE, prevE, DUNE, DSPE, HUNE, HSPE) {
     
     patdata <- patenv[[ICN]]
     
     if (is.null(patdata)) {
       
-      patdata <- data.frame("PatientICN" = numeric(), "EventCode" = numeric(), "EventCategory" = character(), "EventDateTime" = character(), 
-                           "OrdinalThisEvent" = numeric(), "TotalNumTx" = numeric(), "DaysSincePrevEvent" = numeric(), "DaysUntilNextEvent" = numeric(), 
-                           "FirstTxEvent" = character(), "LastTxEvent" = character(), "DurationTx"  = numeric(),
-                           "HoursSincePrevEvent" = numeric(), "HoursUntilNextEvent" = numeric())
+      patdata <- data.frame("PatientICN" = numeric(), "EventGeneralCategory" = character(), "EventDateTime" = character(), 
+                            "EventYear" = numeric(), "EventMonth" = numeric(), "EventDay" = numeric(), "EventWeek" = numeric(), "EventWeekday" = numeric(),
+                           "TotalNumEvents" = numeric(), "NumExposureEvents" = numeric(), "NumHistoryEvents" = numeric(), 
+                           "NumManagementEvents" = numeric(), "NumOTVEvents" = numeric(), "NumPhysicsEvents" = numeric(), "NumEncounterEvents" = numeric(), 
+                           "NumHyperthermiaEvents" = numeric(), "NumImagingEvents" = numeric(), "NumTreatmentEvents" = numeric(), 
+                           "NumPlanningEvents" = numeric(), "NumSimEvents" = numeric(), "NumSideEffectEvents" = numeric(),
+                           "NextEvent" = character(), "PrevEvent" = character(), "DaysUntilNextEvent" = numeric(), "DaysSincePrevEvent" = numeric(), 
+                           "HoursUntilNextEvent" = numeric(), "HoursSincePrevEvent" = numeric())
       
     }
     
-    newRow <- data.frame(as.numeric(ICN), code, cate, EDT, ord, tot, DSPE, DUNE, first, last, dur, HSPE, HUNE, stringsAsFactors = FALSE)
-    colnames(newRow) <- c("PatientICN", "EventCode", "EventCategory", "EventDateTime", "OrdinalThisEvent", "TotalNumTx", "DaysSincePrevEvent",
-                          "DaysUntilNextEvent", "FirstTxEvent", "LastTxEvent", "DurationTx", "HoursSincePrevEvent", "HoursUntilNextEvent")
+    newRow <- data.frame(as.numeric(ICN), EGC, EDT, EY, EM, ED, EW, EWd, tot, exp, hist, man, otv, phys, enc, hyp, ima, tx, plan, sim, se, nextE, prevE, DUNE, DSPE, HUNE, HSPE, stringsAsFactors = FALSE)
+    colnames(newRow) <- c("PatientICN", "EventGeneralCategory", "EventDateTime", "EventYear", "EventMonth", "EventDay", "EventWeek", "EventWeekday", 
+                          "TotalNumEvents", "NumExposureEvents", "NumHistoryEvents", "NumManagementEvents", "NumOTVEvents", "NumPhysicsEvents", "NumEncounterEvents",
+                          "NumHyperthermiaEvents", "NumImagingEvents", "NumTreatmentEvents", "NumPlanningEvents", "NumSimEvents", "NumSideEffectEvents",
+                          "NextEvent", "PrevEvent", "DaysUntilNextEvent", "DaysSincePrevEvent", "HoursUntilNextEvent", "HoursSincePrevEvent")
     
     patdata <- rbind(patdata, newRow, stringsAsFactors = FALSE, make.row.names = FALSE)
     
@@ -184,12 +193,22 @@ storeInHash <- function(x) {
     
   }
   
-  mapply(temp, x$PatientICN, x$EventCode, x$EventCategory, x$EventDateTime, x$OrdinalThisEvent, x$TotalNumTx, x$DaysSincePrevEvent,
-         x$DaysUntilNextEvent, x$FirstTxEvent, x$LastTxEvent, x$DurationTx, x$HoursSincePrevEvent, x$HoursUntilNextEvent)
+  mapply(temp, x$PatientICN, x$EventGeneralCategory, x$EventDateTime, x$EventYear, x$EventMonth, x$EventDay, x$EventWeek, x$EventWeekday, 
+         x$TotalNumEvents, x$NumExposureEvents, x$NumHistoryEvents, x$NumManagementEvents, x$NumOTVEvents, x$NumPhysicsEvents, x$NumEncounterEvents,
+         x$NumHyperthermiaEvents, x$NumImagingEvents, x$NumTreatmentEvents, x$NumPlanningEvents, x$NumSimEvents, x$NumSideEffectEvents,
+         x$NextEvent, x$PrevEvent, x$DaysUntilNextEvent, x$DaysSincePrevEvent, x$HoursUntilNextEvent, x$HoursSincePrevEvent)
   
   return()
   
 }
+
+
+
+
+
+
+
+
 
 ################################################################################
 
@@ -201,7 +220,7 @@ require("logger")
 ################################################################################
 ### establish logging and output log file
 
-logfile <- "P:/ORD_Thompson_201805044D/Celia/ALGORITHM/20200409_identifyCourses.log"
+logfile <- "P:/ORD_Thompson_201805044D/Celia/ALGORITHM/20200421_identifyCourses.log"
 log_appender(appender_file(logfile), index=2)
 
 ### prepare database connection
@@ -213,25 +232,7 @@ con <- odbcDriverConnect(connection="driver={SQL Server};
 
 ### query to retrieve prepared data from database
 
-query <- "SELECT 
-PatientICN,
-EventCode,
-EventCategory,
-EventDateTime,
-EventWeekOfYear,
-EventWeekday,
-OrdinalThisEvent,
-TotalNumTx,
-DaysSincePrevEvent,
-DaysUntilNextEvent,
-FirstTxEvent,
-FirstWeekday,
-LastTxEvent,
-LastWeekday,
-DurationTx,
-HoursSincePrevEvent,
-HoursUntilNextEvent
-FROM ORD_Thompson_201805044D.Dflt.CJM_20200323_radiation_TX"
+query <- "SELECT * FROM ORD_Thompson_201805044D.Dflt.CJM_20200420_radiation_events"
 
 ### create environment
 
@@ -256,70 +257,96 @@ for (pat in pats) {
   patdata <- patenv[[pat]]
   
   patdata$EventDateTime <- as.POSIXct(patdata$EventDateTime)
-  patdata$FirstTxEvent <- as.POSIXct(patdata$FirstTxEvent)
-  patdata$LastTxEvent <- as.POSIXct(patdata$LastTxEvent)
+  patdata$NextEvent <- as.POSIXct(patdata$NextEvent)
+  patdata$PrevEvent <- as.POSIXct(patdata$PrevEvent)
   
-  ### add columns for total number of courses (for this patient) and ordinal discriminating them; assuming everything == 1 for now
+  ### separate multiple courses, if any
   
-  patdata$TotalNumCourses <- 1
-  patdata$OrdinalThisCourse <- 1
+  checkForMults <- patdata[which(!patdata$EventGeneralCategory %in% c("EXPOSURE", "HX_XRT")),]
   
-  ### check duration of treatment
-  ### length of treatment could be the first indication of number of courses
+  ### identify longest gap between events
   
-  ### if total duration is more than six months, split into two courses at point of biggest gap; then start over with each
+  maxgap <- max(checkForMults$DaysUntilNextEvent, na.rm = TRUE)
+  if (maxgap == -Inf) { maxgap <- 0 }
   
-  if (patdata[1,"DurationTx"] > 183) {
+  ### if gap exceeds threshold, split events into two courses at the point of the gap
+  ### threshold = 6 weeks 
+  
+  if (maxgap > 42) {
     
-    ### instantiate flag variable
-    
-    morePossible <- "yes"
-    
-    while (morePossible == "yes") {
-      
-      ### identify biggest gap between treatment events
-      
-      maxgap <- max(thisPat$DaysUntilNextEvent, na.rm = TRUE)
-      if (maxgap == -Inf) { maxgap <- 0 }
-      
-      ### split course at point of biggest gap
-      
-      divideCourses <- patdata[which(patdata$DaysUntilNextEvent == maxgap), "EventDateTime"]
-      patdata1 <- patdata[which(patdata$EventDateTime <= divideCourses),]
-      patdata2 <- patdata[which(patdata$EventDateTime > divideCourses),]
-      
-      rm(patdata)
-      
-      ### fix course count columns
-      
-      patdata1$TotalNumCourses <- 2
-      patdata2$TotalNumCourses <- 2
-      patdata2$OrdinalThisCourse <- 2
-      
-      ### fix other columns
-      
-      patdata1$TotalNumTx <- nrow(patdata1)
-      patdata2$TotalNumTx <- nrow(patdata2)
-      
-      patdata1$LastTxEvent <- divideCourses
-      patdata2$FirstTxEvent <- divideCourses
-      
-      
-      
-    }
-    
-    
+    beforeGap <- patdata[which(patdata$EventDateTime <= patdata[which(patdata$DaysUntilNextEvent == maxgap), "EventDateTime"])]
+    afterGap <- patdata[which(patdata$EventDateTime >= patdata[which(patdata$DaysSincePrevEvent == maxgap), "EventDateTime"])]
     
   }
   
+  ### THINGS THAT NEED HANDLING:
+  ### what if the max gap value occurs more than once?
+  ### what if there are multiple gaps greater than the threshold?
+  
+  ### identify all gaps between events
+  
+  eventGaps <- unique(checkForMults$DaysUntilNextEvent)
+  
+  ### remove gaps below threshold
+  
+  eventGaps <- eventGaps[which(eventGaps > 42)]
+  
+  ############### will need a loop around following to only run if eventGaps is not null
+  
+  ### retrieve and order the dates associated with the gaps
+    
+  endDates <- sort(checkForMults[which(checkForMults$DaysUntilNextEvent %in% eventGaps), "EventDateTime"])
+    
+  ###### separate patient data into disparate courses at each gap
+
+  ### instantiate output dataframe
+  
+  allCourses <- data.frame(matrix(nrow = 0, ncol = 28, dimnames = list(NULL, colnames(checkForMults))))
+  allCourses$OrdinalThisCourse <- NA
+  
+  ### loop through all course end dates
+    
+  for (ed in 1:length(endDates)) {
+  
+    thisCourse <- checkForMults[which(checkforMults$EventDateTime <= endDates[ed]), ]   
+    thisCourse$OrdinalThisCourse <- ed
+    
+    allCourses <- rbind(allCourses, thisCourse, stringsAsFactors = FALSE)
+    
+    checkForMults <- checkForMults[which(checkforMults$EventDateTime > endDates[ed]), ]
+      
+  }
+
+  allCourses$TotalNumCourses <- length(endDates)
+  
+  rm(checkForMults)
+  
+  
+
   ### check pattern of treatment/non-treatment days
   
   ### build patient treatment calendar
   
-#  patCalendar <- data.frame(matrix(nrow = 0, ncol = 8, dimnames = list(NULL, c("WeekOfYear", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))))
+#  patCalendar <- data.frame(matrix(nrow = 0, ncol = 9, dimnames = list(NULL, c("EventYear", "WeekOfYear", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))))
+  
+#  patCalendar <- list()
+  
+  ### make a date column without time
+  
+  patdata$EventDate <- as.POSIXct(format(patdata$EventDateTime, format = "%Y-%m-%d"))
+  
+  ### retrieve and order all dates 
+  
+  eventDates <- sort(unique(patdata$EventDate))
+  
+  ### retrieve and order all times per date
   
   
   
+  
+  
+  
+  ### retrieve from db all diagnoses for patient starting from time of first* event (*depending on category) through last event (what about multiple courses?)
   
   
   
@@ -348,6 +375,53 @@ for (pat in pats) {
 
 
 
+### check duration of treatment
+### length of treatment could be the first indication of number of courses
+
+### if total duration is more than six months, split into two courses at point of biggest gap; then start over with each
+
+if (patdata[1,"DurationTx"] > 183) {
+  
+  ### instantiate flag variable
+  
+  morePossible <- "yes"
+  
+  while (morePossible == "yes") {
+    
+    ### identify biggest gap between treatment events
+    
+    maxgap <- max(thisPat$DaysUntilNextEvent, na.rm = TRUE)
+    if (maxgap == -Inf) { maxgap <- 0 }
+    
+    ### split course at point of biggest gap
+    
+    divideCourses <- patdata[which(patdata$DaysUntilNextEvent == maxgap), "EventDateTime"]
+    patdata1 <- patdata[which(patdata$EventDateTime <= divideCourses),]
+    patdata2 <- patdata[which(patdata$EventDateTime > divideCourses),]
+    
+    rm(patdata)
+    
+    ### fix course count columns
+    
+    patdata1$TotalNumCourses <- 2
+    patdata2$TotalNumCourses <- 2
+    patdata2$OrdinalThisCourse <- 2
+    
+    ### fix other columns
+    
+    patdata1$TotalNumTx <- nrow(patdata1)
+    patdata2$TotalNumTx <- nrow(patdata2)
+    
+    patdata1$LastTxEvent <- divideCourses
+    patdata2$FirstTxEvent <- divideCourses
+    
+    
+    
+  }
+  
+  
+  
+}
 
 
 #################################################################################
