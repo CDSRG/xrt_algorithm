@@ -202,14 +202,6 @@ storeInHash <- function(x) {
   
 }
 
-
-
-
-
-
-
-
-
 ################################################################################
 
 ### prepare package dependencies
@@ -247,8 +239,13 @@ fetchQuery(con, n = 100000, FUN = storeInHash)
 
 pats <- ls(envir = patenv)
 
+### retrieve gold standard data for validation
+
+query <- "SELECT * FROM ORD_Thompson_201805044D.Dflt.GOLD_STANDARD"
+
+goldStandard <- sqlQuery(con, query, as.is = TRUE)
+
 ### process data for each patient
-########################## NEED TO AGGREGATE EVENTS WITHIN A FEW HOURS #######################################################################################################
 
 for (pat in pats) {
   
@@ -262,27 +259,10 @@ for (pat in pats) {
   
   ### separate multiple courses, if any
   
+  ### do not include exposure and history events in course definition
+  
   checkForMults <- patdata[which(!patdata$EventGeneralCategory %in% c("EXPOSURE", "HX_XRT")),]
-  
-  ### identify longest gap between events
-  
-  maxgap <- max(checkForMults$DaysUntilNextEvent, na.rm = TRUE)
-  if (maxgap == -Inf) { maxgap <- 0 }
-  
-  ### if gap exceeds threshold, split events into two courses at the point of the gap
-  ### threshold = 6 weeks 
-  
-  if (maxgap > 42) {
-    
-    beforeGap <- patdata[which(patdata$EventDateTime <= patdata[which(patdata$DaysUntilNextEvent == maxgap), "EventDateTime"])]
-    afterGap <- patdata[which(patdata$EventDateTime >= patdata[which(patdata$DaysSincePrevEvent == maxgap), "EventDateTime"])]
-    
-  }
-  
-  ### THINGS THAT NEED HANDLING:
-  ### what if the max gap value occurs more than once?
-  ### what if there are multiple gaps greater than the threshold?
-  
+
   ### identify all gaps between events
   
   eventGaps <- unique(checkForMults$DaysUntilNextEvent)
@@ -320,17 +300,7 @@ for (pat in pats) {
   allCourses$TotalNumCourses <- length(endDates)
   
   rm(checkForMults)
-  
-  
 
-  ### check pattern of treatment/non-treatment days
-  
-  ### build patient treatment calendar
-  
-#  patCalendar <- data.frame(matrix(nrow = 0, ncol = 9, dimnames = list(NULL, c("EventYear", "WeekOfYear", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))))
-  
-#  patCalendar <- list()
-  
   ### make a date column without time
   
   patdata$EventDate <- as.POSIXct(format(patdata$EventDateTime, format = "%Y-%m-%d"))
@@ -346,257 +316,42 @@ for (pat in pats) {
   
   
   
-  ### retrieve from db all diagnoses for patient starting from time of first* event (*depending on category) through last event (what about multiple courses?)
+  ### retrieve from db all relevant diagnoses for patient starting from time of first* event (*depending on category) through last event (what about multiple courses?)
   
   
   
   
   
   
-                            
-#  patenv[[pat]] <- list(patdata, patCalendar)
-  
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-######################################################################################## OLD STUFF THAT MAY YET BE USEFUL
-
-
-
-### check duration of treatment
-### length of treatment could be the first indication of number of courses
-
-### if total duration is more than six months, split into two courses at point of biggest gap; then start over with each
-
-if (patdata[1,"DurationTx"] > 183) {
-  
-  ### instantiate flag variable
-  
-  morePossible <- "yes"
-  
-  while (morePossible == "yes") {
-    
-    ### identify biggest gap between treatment events
-    
-    maxgap <- max(thisPat$DaysUntilNextEvent, na.rm = TRUE)
-    if (maxgap == -Inf) { maxgap <- 0 }
-    
-    ### split course at point of biggest gap
-    
-    divideCourses <- patdata[which(patdata$DaysUntilNextEvent == maxgap), "EventDateTime"]
-    patdata1 <- patdata[which(patdata$EventDateTime <= divideCourses),]
-    patdata2 <- patdata[which(patdata$EventDateTime > divideCourses),]
-    
-    rm(patdata)
-    
-    ### fix course count columns
-    
-    patdata1$TotalNumCourses <- 2
-    patdata2$TotalNumCourses <- 2
-    patdata2$OrdinalThisCourse <- 2
-    
-    ### fix other columns
-    
-    patdata1$TotalNumTx <- nrow(patdata1)
-    patdata2$TotalNumTx <- nrow(patdata2)
-    
-    patdata1$LastTxEvent <- divideCourses
-    patdata2$FirstTxEvent <- divideCourses
-    
-    
-    
-  }
   
   
+  ### VALIDATION
+  
+  patInGold <- goldStandard[which(goldStandard$PatientICN == pat), ]
+  
+  ### compare: number of courses, start and end dates of each course, cancer diagnosis
+  ### write to file
+  
+  
+  
+  
+  
+
   
 }
 
-
-#################################################################################
-#################################################################################
-
-### Two ways to divide the patients: by number of treatments or by duration of treatment.
-### do it in a loop that makes a list of lists of dataframes; that way nothing needs to be predetermined
+### report validation results
+### read in detailed output file; assess stats; write summary output to new file
 
 
 
-durations <- sort(unique(cohort$DurationTx))
-
-courses <- list()
-
-for (d in 1:length(durations)) {
-  
-  thisDur <- cohort[which(cohort$DurationTx == durations[d]),]
-  
-  numTx <- sort(unique(thisDur$TotalNumTx))
-  
-  coursesThisDur <- list()
-  
-  for (n in 1:length(numTx)) {
-    
-    coursesThisDur[[n]] <- thisDur[which(thisDur$TotalNumTx == numTx[n]),]
-    
-    thisDur <- thisDur[which(thisDur$TotalNumTx > numTx[n]),]
-    
-  }
-  
-  courses[[d]] <- coursesThisDur
-  
-  rm(coursesThisDur)
-  rm(thisDur)
-  rm(numTx)
-  
-  cohort <- cohort[which(cohort$DurationTx > durations[d]),]
-  
-}
-
-
-### instantiate output dataframe
-
-patCourses <- as.data.frame(matrix(nrow = 0, ncol = 5))
-colnames(patCourses) <- c("PatientICN", "StartDate", "EndDate", "MultipleCourses", "ProblemFlag")
-patCourses$PatientICN <- as.numeric(patCourses$PatientICN)
-patCourses$StartDate <- as.POSIXct(patCourses$StartDate)
-patCourses$EndDate <- as.POSIXct(patCourses$EndDate)
-patCourses$MultipleCourses <- as.character(patCourses$MultipleCourses)
-patCourses$ProblemFlag <- as.character(patCourses$ProblemFlag)
-
-### step through courses list, identifying and defining treatment courses for each patient
-
-for (c in 1:length(courses)) {
-  
-  for (d in 1:length(courses[[c]])) {
-    
-    pats <- unique(courses[[c]][[d]]$PatientICN)
-    
-    for (pat in pats) {
-      ### assess data per patient
-      
-      thisPat <- courses[[c]][[d]][which(courses[[c]][[d]]$PatientICN == pat),]
-      
-      ### identify maximum gap between treatment events for this patient
-      
-      if (thisPat$DurationTx[1] > 1) {
-        
-        maxgap <- max(thisPat$DaysUntilNextEvent, na.rm = TRUE)
-        if (maxgap == -Inf) { maxgap <- 0 }
-        
-      } else { maxgap <- 0 }
-      
-      if (thisPat$DurationTx[1] < 183) {
-        ### treatment lasted less than six months which indicates a single course
-        
-        if (maxgap < 4) {
-          ### no gaps between treatment events longer than a 3-day weekend
-          ### further indicates a single course, as well as no problems
-          
-          thisCourse <- thisPat[1, c("PatientICN", "FirstTxEvent", "LastTxEvent")]
-          thisCourse$MultipleCourses <- "no"
-          thisCourse$ProblemFlag <- "no"
-          
-        } else if (maxgap > 62) {
-          ### two month gap in treatments 
-          ### indicates multiple courses more than a problem
-         
-          firstCourse <- thisPat[which(thisPat$DaysUntilNextEvent == maxgap), 
-                                 c("PatientICN", "FirstTxEvent", "EventDateTime")]
-          secondCourse <- thisPat[which(thisPat$DaysSincePrevEvent == maxgap), 
-                                  c("PatientICN", "EventDateTime", "LastTxEvent")]
-          thisCourse <- rbind(firstCourse, secondCourse)
-          rm(firstCourse)
-          rm(secondCourse)
-          thisCourse$MultipleCourses <- "yes"
-          thisCourse$ProblemFlag <- "no"
-          
-        } else {
-          ### unknown if  complications or multiple courses
-          
-          thisCourse <- thisPat[1, c("PatientICN", "FirstTxEvent", "LastTxEvent")]
-          thisCourse$MultipleCourses <- "unknown"
-          thisCourse$ProblemFlag <- "yes"
-          
-        }
-        
-        patCourses <- rbind(patCourses, thisCourse)
-        rm(thisCourse)
-        
-      } else {
-        ### treatment lasted more than six months which indicates more than one course
-        
-        firstCourse <- thisPat[which(thisPat$DaysUntilNextEvent == maxgap), 
-                               c("PatientICN", "FirstTxEvent", "EventDateTime")]
-        secondCourse <- thisPat[which(thisPat$DaysSincePrevEvent == maxgap), 
-                                c("PatientICN", "EventDateTime", "LastTxEvent")]
-        thisCourse <- rbind(firstCourse, secondCourse)
-        rm(firstCourse)
-        rm(secondCourse)
-        thisCourse$MultipleCourses <- "yes"
-        thisCourse$ProblemFlag <- "unknown" 
-        
-        patCourses <- rbind(patCourses, thisCourse)
-        rm(thisCourse)
-        
-      }
-      
-      rm(thisPat)
-      rm(maxgap)
-      
-    }
-    
-  }
-  
-}
-
-
-### write courses to file for posterity
-
-rownames(patCourses) <- NULL
-
-write.table(patCourses, file = "P:/ORD_Thompson_201805044D/Celia/ALGORITHM/20200406_courses_1.csv", sep = ",", row.names = FALSE)
 
 
 
-### check gold standard
-
-goldstandard <- sqlQuery(con, "SELECT
-PatientICN,
-JLV_TotalNumCourses,
-JLV_OrdinalThisCourse,
-JLV_FirstEventThisCourse,
-JLV_LastEventThisCourse
-FROM ORD_Thompson_201805044D.Dflt.GOLD_STANDARD", as.is = TRUE)
 
 
 
-goldICNs <- unique(goldstandard$PatientICN)
 
 
-checkpats <- patCourses[which(patCourses$PatientICN %in% goldICNs),]
 
-### don't know why, but 28 unique patients in gold standard table, and only 12 had data in patCourses
-
-verifycourses <- merge(goldstandard, checkpats, by = "PatientICN")
-
-verifycourses$FirstTxEvent <- as.Date(verifycourses$FirstTxEvent, format = "%Y-%m-%d")
-verifycourses$LastTxEvent <- as.Date(verifycourses$LastTxEvent, format = "%Y-%m-%d")
-
-verifycourses$multiples <- (verifycourses$JLV_TotalNumCourses > 1 && verifycourses$MultipleCourses != "no") || (verifycourses$JLV_TotalNumCourses == 1 && verifycourses$MultipleCourses != "yes")
-
-verifycourses$StartDate <- (verifycourses$JLV_FirstEventThisCourse == verifycourses$FirstTxEvent)
-
-verifycourses$EndDate <- (verifycourses$JLV_LastEventThisCourse == verifycourses$LastTxEvent)
-
-write.table(verifycourses, file = "P:/ORD_Thompson_201805044D/Celia/ALGORITHM/20200406_verified_courses_1.csv", sep = ",", row.names = FALSE)
 
