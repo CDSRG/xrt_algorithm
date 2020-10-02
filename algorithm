@@ -1,0 +1,230 @@
+### The Algorithm to identify courses of radiation therapy
+
+### Iteration 1; 29 September 2020 - 1 October 2020
+
+### Goal: identify all patients with one course consisting of one treatment
+### output file: P:/ORD_Thompson_201911032D/algorithm_output_20200930.csv
+### validation file: P:/ORD_Thompson_201911032D/algorithm_VALIDATION_output_20201001.csv
+
+###################################################################################################
+### Performance
+# 24,374 patients identified by algorithm
+# 12 pulled by query from Gold Standard table
+# 7 matches made between algorithm results and Gold Standard
+# 5 agreed on all variables
+# 2 did not agree on dates: 
+  # Patient x472 has a noted discrepancy between db dates and chart dates
+  # Patient x774 has db and [recorded] chart dates different by a digit and 10 days in real time
+# 5 from Gold Standard were not caught by algorithm
+  # 2 of these had multiple codes at different-by-minutes times 
+  # 1 had no "treatment" codes in db -- probable categorization error, awaiting Reid's confirmation
+  # 1 had two types of treatment with overlapping dates (brachy and ebrt) and thus multiple fractions over multiple days -- was not a proper comparator
+  # 1 was not identified by the prep done in db; thus algorithm did not consider -- NumTx table tally was incorrectly inflated due to having multiple CPT codes
+### LESSONS LEARNED
+  # need to update CPT code classifications
+  # need to clean data before running algorithm to tend to multiple codes and slightly varying times
+  # do not do NumTx prep in db
+###################################################################################################
+
+### load CDSRG functions
+
+source("H:CeliaPackage.R")
+
+### instantiate variables
+
+serverName <- "VHACDWRB03"
+dbName <- "ORD_Thompson_201911032D"
+projectName <- "algorithm"
+  
+### instantiate query variable for retrieving data
+  
+query <- "SELECT DISTINCT PatientICN, EventCategory, EventDateTime FROM ORD_Thompson_201911032D.Dflt.CJM_radiation_cohort_by_codes_all_events_20200706"
+query <- paste(query, " WHERE PatientICN IN (SELECT PatientICN FROM ", sep = "")
+query <- paste(query, " ORD_Thompson_201911032D.Dflt.CJM_radiation_cohort_numTX_20200929 WHERE NumTx = 1)", sep = "")
+  
+### establish database connection
+  
+con <- makeCon(serverName, dbName)
+  
+### establish log file
+  
+makeLog(dbName, projectName)
+  
+### establish output file
+
+fCon <- makeOutputFile(dbName, projectName, outputFileHeader = "PatientICN, TotalNumCourses, OrdinalThisCourse, BeginTx, EndTx")
+  
+### prepare look up table for event categories
+  
+catEvents <- makeLUT(fileNameAndPath = "P:/ORD_Thompson_201805044D/Celia/ALGORITHM/EventCategories.csv")
+  
+### instantiate environment hash
+  
+patenv <- new.env(hash = TRUE)
+  
+### retrieve data and populate environment hash
+  
+prepQuery(con, query)
+fetchQuery(con, query, FUN = storeInHash, hash = patenv, keys = "PatientICN")
+
+### identify all individual patients
+  
+pats <- ls(envir = patenv)
+
+### process data from environment hash
+  
+for (pat in pats) {
+    
+  ### create temporary copy of this patient's data
+    
+  thisPat <- patenv[[pat]]
+
+  ### collapse event categories into general event categories
+    
+  thisPat$GeneralEventCategory <- catEvents(thisPat$EventCategory)
+    
+  ### remove event category column and any rows that then become duplicates
+    
+  thisPat <- unique(thisPat[,-2])
+    
+  ### coerce date column to POSIX
+    
+  thisPat$EventDateTime <- as.POSIXct(as.character(thisPat$EventDateTime))
+    
+  ### coerce PatientICN to character
+    
+  thisPat$PatientICN <- as.character(thisPat$PatientICN)
+    
+  ### identify treatment events
+    
+  patTx <- thisPat[which(thisPat$GeneralEventCategory == 'TREATMENT'),]
+    
+  ### verify that patient has only one treatment event (that's what was pulled from database)
+    
+  if (nrow(patTx) == 1) {
+      
+    ### if verified, write data to output file
+      
+    vals <- paste(pat, 1, 1, as.Date(patTx$EventDateTime), as.Date(patTx$EventDateTime), sep = ",")
+      
+    vals <- paste(vals, " \n", sep = "")
+      
+    cat(vals, file = fCon) 
+      
+  }
+    
+}
+  
+### retrieve output file name
+  
+resultFile <- summary(fCon)$description
+  
+### close file connection
+  
+close(fCon)
+  
+### assess performance
+### establish validation output file
+
+projectName <- paste(projectName, "_VALIDATION", sep = "")
+
+fCon2 <- makeOutputFile(dbName, projectName, outputFileHeader = "PatientICN, OrdinalThisCourse, TotalAgrees, OrdinalAgrees, StartAgrees, EndAgrees")
+
+### retrieve results from output file
+  
+results <- read.csv(resultFile, header = TRUE, stringsAsFactors = FALSE)
+results$BeginTx <- as.Date(results$BeginTx)
+results$EndTx <- as.Date(results$EndTx)
+  
+### retrieve appropriate data from Gold Standard table
+  
+query <- "SELECT DISTINCT PatientICN, TotalNum_Courses, Ordinal_ThisCourse, StartDate, EndDate FROM ORD_Thompson_201911032D.Dflt.RadiationGoldStandard WHERE FractionsDelivered = 1 AND TotalNum_Courses = 1"
+
+gold <- sqlQuery(con, query, as.is = TRUE, stringsAsFactors = FALSE)
+gold$StartDate <- as.Date(gold$StartDate)
+gold$EndDate <- as.Date(gold$EndDate)
+  
+### identify output data that corresponds to Gold Standard data
+  
+algo <- results[which(results$PatientICN %in% gold$PatientICN), ]
+  
+### compare corresponding data from output results and Gold Standard
+### identify individual patients with corresponding data
+  
+pats <- unique(algo$PatientICN)
+  
+### assess courses (from each of Gold Standard and algorithm) for each patient
+  
+for (pat in pats) {
+    
+  ### isolate this patient's data
+    
+  pat.algo <- algo[which(algo$PatientICN == pat),]
+  pat.gold <- gold[which(gold$PatientICN == pat),]
+    
+  ### compare values
+  ### value: total number of courses
+    
+  if (pat.algo$TotalNumCourses == pat.gold$TotalNum_Courses) {
+      
+    agreeTotal <- 'YES'
+      
+  } else {
+      
+    agreeTotal <- 'NO'
+      
+  }
+    
+  ### value: ordinal number of specific course
+    
+  if (pat.algo$OrdinalThisCourse == pat.gold$Ordinal_ThisCourse) {
+      
+    agreeOrdinal <- 'YES'
+      
+  } else {
+      
+    agreeOrdinal <- 'NO'
+      
+  }
+    
+  ### value: first date/time of treatment of specific course
+    
+  if (pat.algo$BeginTx == pat.gold$StartDate) {
+      
+    agreeStart <- 'YES'
+      
+  } else {
+      
+    agreeStart <- 'NO'
+      
+  }
+    
+  ### value: last date/time of treatment of specific course
+    
+  if (pat.algo$EndTx == pat.gold$EndDate) {
+      
+    agreeEnd <- 'YES'
+      
+  } else {
+      
+    agreeEnd <- 'NO'
+      
+  }
+    
+  ### write assessments to validation output file
+  
+  vals <- paste(pat, pat.algo$OrdinalThisCourse, agreeTotal, agreeOrdinal, agreeStart, agreeEnd, sep = ",")
+  
+  vals <- paste(vals, " \n", sep = "")
+  
+  cat(vals, file = fCon2)
+    
+}
+  
+### close validation output file connection
+
+close(fCon2)
+
+
+
+
